@@ -39,6 +39,7 @@ async function createCalendarEvent(title, date, time, duration, location) {
 
     const [hours, minutes] = (time || '09:00').split(':').map(Number);
     eventDate.setHours(hours, minutes, 0, 0);
+	eventDate.setHours(eventDate.getHours() + 5);
 
     const endDate = new Date(eventDate);
     const durationMinutes = duration ? parseInt(duration) : 60;
