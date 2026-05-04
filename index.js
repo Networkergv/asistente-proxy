@@ -19,7 +19,7 @@ async function createCalendarEvent(title, date, time, duration, location) {
       'jueves': null, 'viernes': null, 'sábado': null, 'domingo': null
     };
 
-    const now = const now = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Panama"}));
+    const now = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Panama"}));
     let eventDate = new Date();
 
     if (date === 'hoy') {
