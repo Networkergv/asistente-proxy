@@ -1,0 +1,11 @@
+{
+  "name": "asistente-proxy",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "googleapis": "^171.4.0"
+  }
+}
