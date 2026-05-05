@@ -78,6 +78,29 @@ const server = http.createServer((req, res) => {
       if (parsed.calendar_actions) {
         const results = [];
         for (const action of parsed.calendar_actions) {
+	if (action.type === 'delete_event') {
+  try {
+    const calendarList = await calendar.events.list({
+      calendarId: 'primary',
+      q: action.title,
+      maxResults: 5,
+      singleEvents: true,
+      orderBy: 'startTime',
+      timeMin: new Date().toISOString()
+    });
+    if (calendarList.data.items && calendarList.data.items.length > 0) {
+      await calendar.events.delete({
+        calendarId: 'primary',
+        eventId: calendarList.data.items[0].id
+      });
+      results.push({ title: action.title, deleted: true });
+    } else {
+      results.push({ title: action.title, deleted: false, reason: 'not found' });
+    }
+  } catch(e) {
+    results.push({ title: action.title, deleted: false, reason: e.message });
+  }
+}
           if (action.type === 'add_event') {
             const ok = await createCalendarEvent(
               action.title, action.date, action.time,
