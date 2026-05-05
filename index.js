@@ -115,11 +115,35 @@ const server = http.createServer((req, res) => {
 
     // Transcripción de voz
     if (req.url === '/transcribe') {
-      const text = await transcribeAudio(body, req.headers['content-type']);
-      res.writeHead(200, {'Content-Type': 'application/json'});
-      res.end(JSON.stringify({ text }));
-      return;
+  const chunks = [];
+  // El body ya fue leído, usamos la variable body
+  try {
+    // Buscar el archivo de audio en el FormData raw
+    const boundary = req.headers['content-type']?.split('boundary=')[1];
+    if (boundary) {
+      const parts = body.toString('binary').split(`--${boundary}`);
+      for (const part of parts) {
+        if (part.includes('audio')) {
+          const dataStart = part.indexOf('\r\n\r\n') + 4;
+          const audioData = Buffer.from(part.slice(dataStart, part.lastIndexOf('\r\n')), 'binary');
+          const text = await transcribeAudio(audioData);
+          res.writeHead(200, {'Content-Type': 'application/json'});
+          res.end(JSON.stringify({ text }));
+          return;
+        }
+      }
     }
+    // Si no hay boundary, tratar el body directamente como audio
+    const text = await transcribeAudio(body);
+    res.writeHead(200, {'Content-Type': 'application/json'});
+    res.end(JSON.stringify({ text }));
+  } catch(e) {
+    console.error('Error transcribiendo:', e.message);
+    res.writeHead(500);
+    res.end(JSON.stringify({ error: e.message }));
+  }
+  return;
+}
 
     try {
       const parsed = JSON.parse(body.toString());
