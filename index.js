@@ -1,11 +1,18 @@
 const https = require('https');
 const http = require('http');
 const { google } = require('googleapis');
+const OpenAI = require('openai');
+const formData = require('form-data');
+const fs = require('fs');
+const path = require('path');
 
 const API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
 const REFRESH_TOKEN = process.env.GOOGLE_REFRESH_TOKEN || '';
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET);
 oauth2Client.setCredentials({ refresh_token: REFRESH_TOKEN });
@@ -13,20 +20,12 @@ const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
 async function createCalendarEvent(title, date, time, duration, location) {
   try {
-    const dateMap = {
-      'hoy': 0, 'mañana': 1,
-      'lunes': null, 'martes': null, 'miércoles': null,
-      'jueves': null, 'viernes': null, 'sábado': null, 'domingo': null
-    };
-
     const now = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Panama"}));
-    let eventDate = new Date();
+    let eventDate = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Panama"}));
 
-    if (date === 'hoy') {
-      eventDate = new Date();
-    } else if (date === 'mañana') {
+    if (date === 'mañana') {
       eventDate.setDate(now.getDate() + 1);
-    } else {
+    } else if (date !== 'hoy') {
       const days = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
       const targetDay = days.indexOf(date);
       if (targetDay !== -1) {
@@ -38,12 +37,10 @@ async function createCalendarEvent(title, date, time, duration, location) {
     }
 
     const [hours, minutes] = (time || '09:00').split(':').map(Number);
-    eventDate.setHours(hours, minutes, 0, 0);
-	eventDate.setHours(eventDate.getHours() + 5);
+    eventDate.setHours(hours + 5, minutes, 0, 0);
 
     const endDate = new Date(eventDate);
-    const durationMinutes = duration ? parseInt(duration) : 60;
-    endDate.setMinutes(endDate.getMinutes() + durationMinutes);
+    endDate.setMinutes(endDate.getMinutes() + (parseInt(duration) || 60));
 
     const event = {
       summary: title,
@@ -61,28 +58,11 @@ async function createCalendarEvent(title, date, time, duration, location) {
   }
 }
 
-const server = http.createServer((req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', '*');
-  res.setHeader('Access-Control-Allow-Methods', '*');
-  if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return; }
-
-  let body = '';
-  req.on('data', d => body += d);
-  req.on('end', async () => {
-    console.log('Petición recibida');
-
-    // Si viene con actions, procesar Google Calendar
-    try {
-      const parsed = JSON.parse(body);
-      if (parsed.calendar_actions) {
-        const results = [];
-        for (const action of parsed.calendar_actions) {
-	if (action.type === 'delete_event') {
+async function deleteCalendarEvent(title) {
   try {
     const calendarList = await calendar.events.list({
       calendarId: 'primary',
-      q: action.title,
+      q: title,
       maxResults: 5,
       singleEvents: true,
       orderBy: 'startTime',
@@ -93,20 +73,66 @@ const server = http.createServer((req, res) => {
         calendarId: 'primary',
         eventId: calendarList.data.items[0].id
       });
-      results.push({ title: action.title, deleted: true });
-    } else {
-      results.push({ title: action.title, deleted: false, reason: 'not found' });
+      return true;
     }
-  } catch(e) {
-    results.push({ title: action.title, deleted: false, reason: e.message });
+    return false;
+  } catch (e) {
+    console.error('Error borrando evento:', e.message);
+    return false;
   }
 }
+
+async function transcribeAudio(audioBuffer, mimeType) {
+  try {
+    const tmpFile = `/tmp/audio_${Date.now()}.m4a`;
+    fs.writeFileSync(tmpFile, audioBuffer);
+    
+    const transcription = await openai.audio.transcriptions.create({
+      file: fs.createReadStream(tmpFile),
+      model: 'whisper-1',
+      language: 'es'
+    });
+    
+    fs.unlinkSync(tmpFile);
+    return transcription.text;
+  } catch (e) {
+    console.error('Error transcribiendo:', e.message);
+    return null;
+  }
+}
+
+const server = http.createServer((req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', '*');
+  res.setHeader('Access-Control-Allow-Methods', '*');
+  if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return; }
+
+  const chunks = [];
+  req.on('data', d => chunks.push(d));
+  req.on('end', async () => {
+    const body = Buffer.concat(chunks);
+    console.log('Petición recibida, path:', req.url);
+
+    // Transcripción de voz
+    if (req.url === '/transcribe') {
+      const text = await transcribeAudio(body, req.headers['content-type']);
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(JSON.stringify({ text }));
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(body.toString());
+      
+      if (parsed.calendar_actions) {
+        const results = [];
+        for (const action of parsed.calendar_actions) {
           if (action.type === 'add_event') {
-            const ok = await createCalendarEvent(
-              action.title, action.date, action.time,
-              action.duration, action.location
-            );
+            const ok = await createCalendarEvent(action.title, action.date, action.time, action.duration, action.location);
             results.push({ title: action.title, saved: ok });
+          } else if (action.type === 'delete_event') {
+            const ok = await deleteCalendarEvent(action.title);
+            results.push({ title: action.title, deleted: ok });
           }
         }
         res.writeHead(200, {'Content-Type': 'application/json'});
@@ -115,7 +141,7 @@ const server = http.createServer((req, res) => {
       }
     } catch(e) {}
 
-    // Si no, es una llamada normal a Claude
+    // Llamada normal a Claude
     const options = {
       hostname: 'api.anthropic.com',
       path: '/v1/messages',
